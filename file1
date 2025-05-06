@@ -1,0 +1,78 @@
+import rasterio
+import numpy as np
+import matplotlib.pyplot as plt
+from rasterio.plot import show
+from rasterio.transform import from_origin
+
+# --- Utility Functions ---
+def normalize(array):
+    """Normalize array to 0-1 scale."""
+    array_min, array_max = np.nanmin(array), np.nanmax(array)
+    return (array - array_min) / (array_max - array_min)
+
+def weighted_sum(layers, weights):
+    """Compute weighted overlay."""
+    combined = np.zeros_like(layers[0])
+    for i in range(len(layers)):
+        combined += layers[i] * weights[i]
+    return combined
+
+# --- Load Raster Data ---
+def load_raster(path):
+    with rasterio.open(path) as src:
+        data = src.read(1)
+        profile = src.profile
+    return data, profile
+
+# --- Paths to Layers ---
+layers_paths = {
+    "solar": "data/solar_radiation.tif",         # Higher is better
+    "slope": "data/slope.tif",                   # Lower slope is better
+    "roads_distance": "data/roads_distance.tif", # Lower is better
+    "landuse": "data/landuse.tif"                # Categorized
+}
+
+# --- Weights for Each Factor ---
+weights = {
+    "solar": 0.4,
+    "slope": 0.2,
+    "roads_distance": 0.2,
+    "landuse": 0.2
+}
+
+# --- Load and Normalize Rasters ---
+solar, profile = load_raster(layers_paths["solar"])
+slope, _ = load_raster(layers_paths["slope"])
+roads, _ = load_raster(layers_paths["roads_distance"])
+landuse, _ = load_raster(layers_paths["landuse"])
+
+# --- Reclassify Land Use: 1 (suitable), 0 (unsuitable) ---
+# e.g., only categories 2 (barren) and 5 (grassland) are suitable
+suitable_landuse = np.where(np.isin(landuse, [2, 5]), 1, 0)
+
+# --- Normalize ---
+solar_norm = normalize(solar)
+slope_norm = 1 - normalize(slope)  # Invert slope: lower = more suitable
+roads_norm = 1 - normalize(roads)  # Closer to road = better
+
+# --- Weighted Sum ---
+layers = [solar_norm, slope_norm, roads_norm, suitable_landuse]
+weights_list = [weights["solar"], weights["slope"], weights["roads_distance"], weights["landuse"]]
+suitability = weighted_sum(layers, weights_list)
+
+# --- Save Output ---
+output_path = "output/suitability_map.tif"
+profile.update(dtype=rasterio.float32, count=1)
+
+with rasterio.open(output_path, "w", **profile) as dst:
+    dst.write(suitability.astype(rasterio.float32), 1)
+
+# --- Visualization ---
+plt.figure(figsize=(10, 6))
+plt.title("Renewable Energy Site Suitability Map")
+plt.imshow(suitability, cmap='YlGn')
+plt.colorbar(label='Suitability Score (0 - 1)')
+plt.xlabel('Column Index')
+plt.ylabel('Row Index')
+plt.tight_layout()
+plt.show()
