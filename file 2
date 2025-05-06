@@ -1,0 +1,70 @@
+import streamlit as st
+import rasterio
+import numpy as np
+import matplotlib.pyplot as plt
+from rasterio.plot import show
+
+# --- Utility Functions ---
+def normalize(array):
+    array_min, array_max = np.nanmin(array), np.nanmax(array)
+    return (array - array_min) / (array_max - array_min)
+
+def weighted_sum(layers, weights):
+    combined = np.zeros_like(layers[0])
+    for i in range(len(layers)):
+        combined += layers[i] * weights[i]
+    return combined
+
+def load_raster(path):
+    with rasterio.open(path) as src:
+        data = src.read(1)
+        profile = src.profile
+    return data, profile
+
+# --- Streamlit Interface ---
+st.title("Renewable Energy Site Suitability Model")
+st.write("Select input raster layers and adjust weights.")
+
+solar_path = st.text_input("Solar Radiation Raster Path", "data/solar_radiation.tif")
+slope_path = st.text_input("Slope Raster Path", "data/slope.tif")
+roads_path = st.text_input("Roads Distance Raster Path", "data/roads_distance.tif")
+landuse_path = st.text_input("Land Use Raster Path", "data/landuse.tif")
+
+solar_weight = st.slider("Solar Weight", 0.0, 1.0, 0.4)
+slope_weight = st.slider("Slope Weight", 0.0, 1.0, 0.2)
+roads_weight = st.slider("Roads Distance Weight", 0.0, 1.0, 0.2)
+landuse_weight = st.slider("Land Use Weight", 0.0, 1.0, 0.2)
+
+if st.button("Run Suitability Model"):
+    solar, profile = load_raster(solar_path)
+    slope, _ = load_raster(slope_path)
+    roads, _ = load_raster(roads_path)
+    landuse, _ = load_raster(landuse_path)
+
+    # Reclassify land use: 1 (suitable), 0 (unsuitable)
+    suitable_landuse = np.where(np.isin(landuse, [2, 5]), 1, 0)
+
+    # Normalize
+    solar_norm = normalize(solar)
+    slope_norm = 1 - normalize(slope)
+    roads_norm = 1 - normalize(roads)
+
+    # Compute weighted sum
+    layers = [solar_norm, slope_norm, roads_norm, suitable_landuse]
+    weights = [solar_weight, slope_weight, roads_weight, landuse_weight]
+    suitability = weighted_sum(layers, weights)
+
+    # Display output
+    st.subheader("Suitability Map")
+    fig, ax = plt.subplots(figsize=(8, 5))
+    cax = ax.imshow(suitability, cmap='YlGn')
+    fig.colorbar(cax, ax=ax, label='Suitability Score')
+    st.pyplot(fig)
+
+    # Optionally save output
+    if st.checkbox("Save Output Raster"):
+        output_path = st.text_input("Output File Path", "output/suitability_map.tif")
+        profile.update(dtype=rasterio.float32, count=1)
+        with rasterio.open(output_path, "w", **profile) as dst:
+            dst.write(suitability.astype(rasterio.float32), 1)
+        st.success(f"Saved: {output_path}")
